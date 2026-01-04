@@ -1,0 +1,45 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="fund-dashboard">
+    <div class="fund-header">
+        <h1>Prevention Fund</h1>
+        <p>Transparently funding safety measures from market fees.</p>
+    </div>
+
+    <div class="fund-stats">
+        <div class="stat-box big">
+            <span class="label">Current Balance</span>
+            <span class="value">{{ fund.balance | currency }}</span>
+        </div>
+    </div>
+
+    <div class="expenses-list">
+        <h2>Expense History</h2>
+        {% if fund.expenses %}
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>Date</th>
+                    <th>Description</th>
+                    <th>Recipient</th>
+                    <th>Amount</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for expense in fund.expenses %}
+                <tr>
+                    <td>{{ expense.timestamp.strftime('%Y-%m-%d') }}</td>
+                    <td>{{ expense.description }}</td>
+                    <td>{{ expense.recipient }}</td>
+                    <td>{{ expense.amount | currency }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p>No expenses yet.</p>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

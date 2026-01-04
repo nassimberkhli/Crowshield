@@ -1,0 +1,22 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="create-market">
+    <h1>Create New Market</h1>
+    <form method="POST" class="create-form">
+        <div class="form-group">
+            <label>Question</label>
+            <input type="text" name="question" placeholder="e.g. Will Place X be overcrowded?" required>
+        </div>
+        <div class="form-group">
+            <label>Location</label>
+            <input type="text" name="location" placeholder="e.g. Central Plaza" required>
+        </div>
+        <div class="form-group">
+            <label>Threshold Description</label>
+            <input type="text" name="threshold" placeholder="e.g. > 15,000 people between 18h-20h" required>
+        </div>
+        <button type="submit" class="btn primary">Create Market</button>
+    </form>
+</div>
+{% endblock %}

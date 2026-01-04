@@ -1,0 +1,34 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="hero">
+    <h1>Predict Crowds. Fund Safety.</h1>
+    <p>Join the community to predict crowd risks and automatically fund prevention measures.</p>
+    <div class="user-balance">
+        Your Balance: <strong>{{ user.balance | currency }}</strong>
+    </div>
+</div>
+
+<div class="market-list">
+    <h2>Active Markets</h2>
+    {% if markets %}
+    <div class="grid">
+        {% for market in markets %}
+        <a href="{{ url_for('market_detail', market_id=market.id) }}" class="card market-card">
+            <div class="card-header">
+                <span class="status {{ market.status.value.lower() }}">{{ market.status.value }}</span>
+                <span class="location">{{ market.location }}</span>
+            </div>
+            <h3>{{ market.question }}</h3>
+            <p class="threshold">{{ market.threshold_desc }}</p>
+            <div class="pot-info">
+                <span>Total Pot: {{ market.total_pool | currency }}</span>
+            </div>
+        </a>
+        {% endfor %}
+    </div>
+    {% else %}
+    <p>No active markets. <a href="/create">Create one?</a></p>
+    {% endif %}
+</div>
+{% endblock %}

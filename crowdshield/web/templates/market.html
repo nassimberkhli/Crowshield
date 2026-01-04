@@ -1,0 +1,67 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="market-detail">
+    <div class="market-header">
+        <span class="status {{ market.status.value.lower() }}">{{ market.status.value }}</span>
+        <h1>{{ market.question }}</h1>
+        <p class="location-time">{{ market.location }} • Ends: {{ market.end_time.strftime('%Y-%m-%d %H:%M') }}</p>
+        <p class="threshold-large">{{ market.threshold_desc }}</p>
+    </div>
+
+    <div class="stats-grid">
+        <div class="stat-box">
+            <span class="label">Total Pot</span>
+            <span class="value">{{ market.total_pool | currency }}</span>
+        </div>
+        <div class="stat-box">
+            <span class="label">Over Pool</span>
+            <span class="value">{{ market.pool_over | currency }}</span>
+        </div>
+        <div class="stat-box">
+            <span class="label">Under Pool</span>
+            <span class="value">{{ market.pool_under | currency }}</span>
+        </div>
+    </div>
+
+    {% if market.status.value == 'OPEN' %}
+    <div class="betting-section">
+        <h2>Place Your Bet</h2>
+        <form method="POST" class="bet-form">
+            <div class="form-group">
+                <label>Choose Side</label>
+                <div class="radio-group">
+                    <label class="radio-card">
+                        <input type="radio" name="side" value="OVER" checked>
+                        <span class="radio-content">OVER</span>
+                    </label>
+                    <label class="radio-card">
+                        <input type="radio" name="side" value="UNDER">
+                        <span class="radio-content">UNDER</span>
+                    </label>
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Amount (€)</label>
+                <input type="number" name="amount" min="1" max="{{ user.balance }}" value="10" required>
+            </div>
+            <button type="submit" class="btn primary">Place Bet</button>
+        </form>
+    </div>
+
+    <!-- Admin/Oracle Section for Demo -->
+    <div class="admin-section">
+        <h3>Oracle Actions (Demo)</h3>
+        <form action="{{ url_for('resolve_market', market_id=market.id) }}" method="POST" class="inline-form">
+            <button type="submit" name="result" value="OVER" class="btn small">Resolve OVER</button>
+            <button type="submit" name="result" value="UNDER" class="btn small">Resolve UNDER</button>
+        </form>
+    </div>
+    {% elif market.status.value == 'RESOLVED' %}
+    <div class="result-section">
+        <h2>Market Resolved: {{ market.result.value }}</h2>
+        <p>Winnings have been distributed.</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
