@@ -1,43 +1,60 @@
-from contracts.utils import MASK_128, MIX_A, MIX_B, MIX_C
+from contracts.utils import SECRET_BITS
 
 
 def commitment_payload(player_address, secret, salt):
     return {"player": player_address, "secret": secret, "salt": salt}
 
 
-def initial_bit(secret1: int, secret2: int, index: int) -> int:
-    x = (
-        (secret1 & MASK_128)
-        ^ ((secret2 & MASK_128) << 1)
-        ^ ((index + 1) * MIX_A)
-        ^ (((index + 7) * MIX_B) << 1)
-        ^ ((secret1 + secret2 + index) * MIX_C)
-    )
-    x ^= x >> 17
-    x ^= x >> 43
-    x ^= x >> 71
-    x ^= x >> 97
-    return x & 1
+def extract_bit(value: int, shift: int) -> int:
+    return (value >> shift) & 1
+
+
+def initial_bit(secret1: int, secret2: int, index: int, total_bits: int) -> int:
+    half_bits = total_bits // 2
+
+    if index < half_bits:
+        return extract_bit(secret1, index)
+
+    return extract_bit(secret2, index - half_bits)
 
 
 def build_initial_state(secret1: int, secret2: int, total_bits: int) -> list[int]:
-    return [initial_bit(secret1, secret2, i) for i in range(total_bits)]
+    if total_bits <= 0 or total_bits % 2 != 0:
+        raise ValueError("total_bits must be a positive even integer")
+
+    if total_bits > SECRET_BITS:
+        raise ValueError("total_bits must not exceed SECRET_BITS")
+
+    return [initial_bit(secret1, secret2, i, total_bits) for i in range(total_bits)]
 
 
-def step_rule90_ring(state: list[int]) -> list[int]:
+def step_rule150_ring(state: list[int]) -> list[int]:
     n = len(state)
     out = [0] * n
+
     for i in range(n):
-        out[i] = state[(i - 1) % n] ^ state[(i + 1) % n]
+        out[i] = state[(i - 1) % n] ^ state[i] ^ state[(i + 1) % n]
+
     return out
 
 
-def run_full_simulation(secret1: int, secret2: int, total_bits: int, total_rounds: int) -> tuple[list[int], int]:
+def final_result_bit(state: list[int]) -> int:
+    center_index = len(state) // 2
+    return state[center_index]
+
+
+def run_full_simulation(
+    secret1: int,
+    secret2: int,
+    total_bits: int,
+    total_rounds: int,
+) -> tuple[list[int], int]:
     state = build_initial_state(secret1, secret2, total_bits)
+
     for _ in range(total_rounds):
-        state = step_rule90_ring(state)
-    center_index = total_bits // 2
-    return state, state[center_index]
+        state = step_rule150_ring(state)
+
+    return state, final_result_bit(state)
 
 
 def run_batched_simulation(
@@ -48,6 +65,12 @@ def run_batched_simulation(
     init_batch_size: int,
     sim_batch_size: int,
 ) -> tuple[list[int], int]:
+    if init_batch_size <= 0:
+        raise ValueError("init_batch_size must be positive")
+
+    if sim_batch_size <= 0:
+        raise ValueError("sim_batch_size must be positive")
+
     state0 = [0] * total_bits
     state1 = [0] * total_bits
 
@@ -55,7 +78,7 @@ def run_batched_simulation(
     while init_cursor < total_bits:
         for _ in range(init_batch_size):
             if init_cursor < total_bits:
-                state0[init_cursor] = initial_bit(secret1, secret2, init_cursor)
+                state0[init_cursor] = initial_bit(secret1, secret2, init_cursor, total_bits)
                 init_cursor += 1
 
     active = 0
@@ -71,7 +94,9 @@ def run_batched_simulation(
                 left_index = total_bits - 1 if current_index == 0 else current_index - 1
                 right_index = 0 if current_index + 1 == total_bits else current_index + 1
 
-                dst[current_index] = src[left_index] ^ src[right_index]
+                dst[current_index] = (
+                    src[left_index] ^ src[current_index] ^ src[right_index]
+                )
                 current_index += 1
 
                 if current_index == total_bits:
@@ -80,5 +105,4 @@ def run_batched_simulation(
                     active = 1 - active
 
     final_state = state0 if active == 0 else state1
-    center_index = total_bits // 2
-    return final_state, final_state[center_index]
+    return final_state, final_result_bit(final_state)

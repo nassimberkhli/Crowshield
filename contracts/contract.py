@@ -14,10 +14,31 @@ def bet_contract():
             bit = sp.nat(1)
         return bit
 
-    def initial_bit(params):
-        raw_value = params.secret1 ^ params.secret2 ^ params.index
-        reduced = raw_value - ((raw_value >> 1) << 1)
+    def extract_bit(params):
+        shifted_value = params.value >> params.shift
+        reduced = shifted_value - ((shifted_value >> 1) << 1)
         return nat_bit_from_raw(reduced)
+
+    def initial_bit(params):
+        half_bits = params.total_bits >> 1
+
+        bit = sp.nat(0)
+        if params.index < half_bits:
+            bit = extract_bit(
+                sp.record(
+                    value=params.secret1,
+                    shift=params.index,
+                )
+            )
+        else:
+            bit = extract_bit(
+                sp.record(
+                    value=params.secret2,
+                    shift=sp.as_nat(params.index - half_bits),
+                )
+            )
+
+        return bit
 
     def commitment_of(params):
         payload = sp.record(
@@ -32,6 +53,7 @@ def bet_contract():
             self,
             join_window_seconds,
             reveal_window_seconds,
+            progress_window_seconds,
             total_bits,
             total_rounds,
             init_batch_size,
@@ -47,8 +69,10 @@ def bet_contract():
             self.data.player2_revealed = False
             self.data.join_deadline = None
             self.data.reveal_deadline = None
+            self.data.progress_deadline = None
             self.data.join_window_seconds = join_window_seconds
             self.data.reveal_window_seconds = reveal_window_seconds
+            self.data.progress_window_seconds = progress_window_seconds
             self.data.phase = sp.nat(0)
             self.data.finished = False
             self.data.winner = None
@@ -76,8 +100,10 @@ def bet_contract():
                     player2_revealed=sp.bool,
                     join_deadline=sp.option[sp.timestamp],
                     reveal_deadline=sp.option[sp.timestamp],
+                    progress_deadline=sp.option[sp.timestamp],
                     join_window_seconds=sp.int,
                     reveal_window_seconds=sp.int,
+                    progress_window_seconds=sp.int,
                     phase=sp.nat,
                     finished=sp.bool,
                     winner=sp.option[sp.address],
@@ -101,6 +127,13 @@ def bet_contract():
             assert not self.data.finished, "GAME_ALREADY_FINISHED"
             assert self.data.phase == sp.nat(0), "BAD_PHASE"
             assert sp.amount == sp.tez(10), "INVALID_STAKE"
+            assert self.data.total_bits > 0, "INVALID_TOTAL_BITS"
+            assert ((self.data.total_bits >> 1) << 1) == self.data.total_bits, (
+                "INVALID_TOTAL_BITS"
+            )
+            assert self.data.total_rounds > 0, "INVALID_TOTAL_ROUNDS"
+            assert self.data.init_batch_size > 0, "INVALID_BATCH_SIZE"
+            assert self.data.sim_batch_size > 0, "INVALID_BATCH_SIZE"
 
             if self.data.player1.is_none():
                 self.data.player1 = sp.Some(sp.sender)
@@ -129,6 +162,10 @@ def bet_contract():
             assert self.data.phase == sp.nat(0), "BAD_PHASE"
             assert params.secret < (1 << 128), "SECRET_TOO_LARGE"
             assert self.data.player2.is_some(), "SECOND_PLAYER_MISSING"
+            assert self.data.reveal_deadline.is_some(), "SECOND_PLAYER_MISSING"
+            assert sp.now <= self.data.reveal_deadline.unwrap_some(), (
+                "REVEAL_PHASE_OVER"
+            )
 
             if sp.sender == self.data.player1.unwrap_some():
                 assert not self.data.player1_revealed, "ALREADY_REVEALED"
@@ -161,11 +198,18 @@ def bet_contract():
             if self.data.player1_revealed:
                 if self.data.player2_revealed:
                     self.data.phase = sp.nat(1)
+                    self.data.progress_deadline = sp.Some(
+                        sp.add_seconds(sp.now, self.data.progress_window_seconds)
+                    )
 
         @sp.entrypoint
         def initialize_batch(self):
             assert not self.data.finished, "GAME_ALREADY_FINISHED"
             assert self.data.phase == sp.nat(1), "BAD_PHASE"
+            assert self.data.progress_deadline.is_some(), "NOTHING_TO_CLAIM"
+            assert sp.now <= self.data.progress_deadline.unwrap_some(), (
+                "REVEAL_PHASE_OVER"
+            )
 
             for _ in range(self.data.init_batch_size):
                 if self.data.init_cursor < self.data.total_bits:
@@ -174,6 +218,7 @@ def bet_contract():
                             secret1=self.data.player1_secret.unwrap_some(),
                             secret2=self.data.player2_secret.unwrap_some(),
                             index=self.data.init_cursor,
+                            total_bits=self.data.total_bits,
                         )
                     )
 
@@ -194,6 +239,10 @@ def bet_contract():
                     self.data.states[key0] = bit
                     self.data.init_cursor += 1
 
+            self.data.progress_deadline = sp.Some(
+                sp.add_seconds(sp.now, self.data.progress_window_seconds)
+            )
+
             if self.data.init_cursor == self.data.total_bits:
                 self.data.phase = sp.nat(2)
                 self.data.current_round = sp.nat(0)
@@ -204,6 +253,10 @@ def bet_contract():
         def simulate_batch(self):
             assert not self.data.finished, "GAME_ALREADY_FINISHED"
             assert self.data.phase == sp.nat(2), "BAD_PHASE"
+            assert self.data.progress_deadline.is_some(), "NOTHING_TO_CLAIM"
+            assert sp.now <= self.data.progress_deadline.unwrap_some(), (
+                "REVEAL_PHASE_OVER"
+            )
 
             for _ in range(self.data.sim_batch_size):
                 if self.data.current_round < self.data.total_rounds:
@@ -221,6 +274,7 @@ def bet_contract():
                     else:
                         left_index = sp.as_nat(self.data.current_index - 1)
 
+                    center_index = self.data.current_index
                     next_index = self.data.current_index + 1
 
                     right_index = sp.nat(0)
@@ -236,6 +290,13 @@ def bet_contract():
                             index=left_index,
                         )
                     )
+                    center_key = state_key(
+                        sp.record(
+                            buffer=source_buffer,
+                            total_bits=self.data.total_bits,
+                            index=center_index,
+                        )
+                    )
                     right_key = state_key(
                         sp.record(
                             buffer=source_buffer,
@@ -245,10 +306,17 @@ def bet_contract():
                     )
 
                     left_value = self.data.states.get(left_key, default=sp.nat(0))
+                    center_value = self.data.states.get(center_key, default=sp.nat(0))
                     right_value = self.data.states.get(right_key, default=sp.nat(0))
 
+                    left_center_value = sp.nat(0)
+                    if left_value == center_value:
+                        left_center_value = sp.nat(0)
+                    else:
+                        left_center_value = sp.nat(1)
+
                     new_value = sp.nat(0)
-                    if left_value == right_value:
+                    if left_center_value == right_value:
                         new_value = sp.nat(0)
                     else:
                         new_value = sp.nat(1)
@@ -293,6 +361,7 @@ def bet_contract():
                             self.data.finished = True
                             self.data.phase = sp.nat(3)
                             self.data.outcome_bit = sp.Some(final_bit)
+                            self.data.progress_deadline = None
 
                             if final_bit == sp.nat(0):
                                 self.data.winner = self.data.player1
@@ -301,49 +370,75 @@ def bet_contract():
                                 self.data.winner = self.data.player2
                                 sp.send(self.data.player2.unwrap_some(), sp.balance)
 
+            if not self.data.finished:
+                self.data.progress_deadline = sp.Some(
+                    sp.add_seconds(sp.now, self.data.progress_window_seconds)
+                )
+
         @sp.entrypoint
         def claim_timeout(self):
             assert not self.data.finished, "GAME_ALREADY_FINISHED"
-            assert self.data.phase == sp.nat(0), "BAD_PHASE"
             assert self.data.player1.is_some(), "NOTHING_TO_CLAIM"
 
-            if self.data.player2.is_none():
-                assert self.data.join_deadline.is_some(), "NOTHING_TO_CLAIM"
-                assert sp.now > self.data.join_deadline.unwrap_some(), (
-                    "NOTHING_TO_CLAIM"
+            if self.data.phase == sp.nat(0):
+                if self.data.player2.is_none():
+                    assert self.data.join_deadline.is_some(), "NOTHING_TO_CLAIM"
+                    assert sp.now > self.data.join_deadline.unwrap_some(), (
+                        "NOTHING_TO_CLAIM"
+                    )
+
+                    self.data.finished = True
+                    self.data.phase = sp.nat(3)
+                    self.data.winner = self.data.player1
+                    self.data.outcome_bit = None
+                    self.data.progress_deadline = None
+                    sp.send(self.data.player1.unwrap_some(), sp.balance)
+                else:
+                    assert self.data.reveal_deadline.is_some(), "NOTHING_TO_CLAIM"
+                    assert sp.now > self.data.reveal_deadline.unwrap_some(), (
+                        "NOTHING_TO_CLAIM"
+                    )
+
+                    if self.data.player1_revealed:
+                        if self.data.player2_revealed:
+                            assert False, "NOTHING_TO_CLAIM"
+                        else:
+                            self.data.finished = True
+                            self.data.phase = sp.nat(3)
+                            self.data.winner = self.data.player1
+                            self.data.outcome_bit = None
+                            self.data.progress_deadline = None
+                            sp.send(self.data.player1.unwrap_some(), sp.balance)
+                    else:
+                        if self.data.player2_revealed:
+                            self.data.finished = True
+                            self.data.phase = sp.nat(3)
+                            self.data.winner = self.data.player2
+                            self.data.outcome_bit = None
+                            self.data.progress_deadline = None
+                            sp.send(self.data.player2.unwrap_some(), sp.balance)
+                        else:
+                            self.data.finished = True
+                            self.data.phase = sp.nat(3)
+                            self.data.winner = None
+                            self.data.outcome_bit = None
+                            self.data.progress_deadline = None
+                            sp.send(self.data.player1.unwrap_some(), sp.tez(10))
+                            sp.send(self.data.player2.unwrap_some(), sp.tez(10))
+            else:
+                assert self.data.phase == sp.nat(1) or self.data.phase == sp.nat(2), (
+                    "BAD_PHASE"
+                )
+                assert self.data.player2.is_some(), "NOTHING_TO_CLAIM"
+                assert self.data.progress_deadline.is_some(), "NOTHING_TO_CLAIM"
+                assert sp.now > self.data.progress_deadline.unwrap_some(), (
+                    "PROGRESS_TIMEOUT_NOT_REACHED"
                 )
 
                 self.data.finished = True
                 self.data.phase = sp.nat(3)
-                self.data.winner = self.data.player1
+                self.data.winner = None
                 self.data.outcome_bit = None
-                sp.send(self.data.player1.unwrap_some(), sp.balance)
-            else:
-                assert self.data.reveal_deadline.is_some(), "NOTHING_TO_CLAIM"
-                assert sp.now > self.data.reveal_deadline.unwrap_some(), (
-                    "NOTHING_TO_CLAIM"
-                )
-
-                if self.data.player1_revealed:
-                    if self.data.player2_revealed:
-                        assert False, "NOTHING_TO_CLAIM"
-                    else:
-                        self.data.finished = True
-                        self.data.phase = sp.nat(3)
-                        self.data.winner = self.data.player1
-                        self.data.outcome_bit = None
-                        sp.send(self.data.player1.unwrap_some(), sp.balance)
-                else:
-                    if self.data.player2_revealed:
-                        self.data.finished = True
-                        self.data.phase = sp.nat(3)
-                        self.data.winner = self.data.player2
-                        self.data.outcome_bit = None
-                        sp.send(self.data.player2.unwrap_some(), sp.balance)
-                    else:
-                        self.data.finished = True
-                        self.data.phase = sp.nat(3)
-                        self.data.winner = None
-                        self.data.outcome_bit = None
-                        sp.send(self.data.player1.unwrap_some(), sp.tez(10))
-                        sp.send(self.data.player2.unwrap_some(), sp.tez(10))
+                self.data.progress_deadline = None
+                sp.send(self.data.player1.unwrap_some(), sp.tez(10))
+                sp.send(self.data.player2.unwrap_some(), sp.tez(10))

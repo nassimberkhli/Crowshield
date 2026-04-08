@@ -2,6 +2,18 @@ import smartpy as sp
 
 from contracts.contract import bet_contract
 from contracts.simulation import run_batched_simulation
+from contracts.utils import (
+    JOIN_WINDOW_SECONDS,
+    PROGRESS_WINDOW_SECONDS,
+    REVEAL_WINDOW_SECONDS,
+)
+from utils.logs import info, section, success
+
+
+TEST_TOTAL_BITS = 16
+TEST_TOTAL_ROUNDS = 8
+TEST_INIT_BATCH_SIZE = 4
+TEST_SIM_BATCH_SIZE = 8
 
 
 def make_commitment(player_address, secret, salt):
@@ -10,24 +22,23 @@ def make_commitment(player_address, secret, salt):
 
 
 @sp.add_test()
-def test_happy_path_small_batched_game():
+def test_happy_path_batched_game():
+    section("Smart contract happy-path test")
+    info("Creating SmartPy scenario for a complete and aligned game flow.")
+
     scenario = sp.test_scenario()
 
     alice = sp.test_account("alice")
     bob = sp.test_account("bob")
 
-    total_bits = 16
-    total_rounds = 8
-    init_batch_size = 4
-    sim_batch_size = 4
-
     contract = bet_contract.BinaryAutomatonBet(
-        100,
-        100,
-        total_bits,
-        total_rounds,
-        init_batch_size,
-        sim_batch_size,
+        JOIN_WINDOW_SECONDS,
+        REVEAL_WINDOW_SECONDS,
+        PROGRESS_WINDOW_SECONDS,
+        TEST_TOTAL_BITS,
+        TEST_TOTAL_ROUNDS,
+        TEST_INIT_BATCH_SIZE,
+        TEST_SIM_BATCH_SIZE,
     )
     scenario += contract
 
@@ -36,9 +47,11 @@ def test_happy_path_small_batched_game():
     alice_salt = sp.bytes("0x11111111111111111111111111111111")
     bob_salt = sp.bytes("0x22222222222222222222222222222222")
 
+    info("Building commitments for both players.")
     alice_commitment = make_commitment(alice.address, alice_secret, alice_salt)
     bob_commitment = make_commitment(bob.address, bob_secret, bob_salt)
 
+    info("Joining both players with the required 10 tez stake.")
     contract.join(
         alice_commitment,
         _sender=alice,
@@ -52,6 +65,7 @@ def test_happy_path_small_batched_game():
         _now=sp.timestamp(1),
     )
 
+    info("Revealing both secrets within the reveal window.")
     contract.reveal(
         sp.record(secret=alice_secret, salt=alice_salt),
         _sender=alice,
@@ -63,19 +77,32 @@ def test_happy_path_small_batched_game():
         _now=sp.timestamp(3),
     )
 
-    for _ in range((total_bits + init_batch_size - 1) // init_batch_size):
-        contract.initialize_batch(_sender=alice, _now=sp.timestamp(4))
+    info("Running initialization batches.")
+    total_init_calls = (TEST_TOTAL_BITS + TEST_INIT_BATCH_SIZE - 1) // TEST_INIT_BATCH_SIZE
+    for step in range(total_init_calls):
+        contract.initialize_batch(
+            _sender=alice,
+            _now=sp.timestamp(10 + step),
+        )
 
-    for _ in range((total_bits * total_rounds + sim_batch_size - 1) // sim_batch_size):
-        contract.simulate_batch(_sender=bob, _now=sp.timestamp(5))
+    info("Running simulation batches.")
+    total_simulation_calls = (
+        TEST_TOTAL_BITS * TEST_TOTAL_ROUNDS + TEST_SIM_BATCH_SIZE - 1
+    ) // TEST_SIM_BATCH_SIZE
+    for step in range(total_simulation_calls):
+        contract.simulate_batch(
+            _sender=bob,
+            _now=sp.timestamp(100 + step),
+        )
 
+    info("Comparing the on-chain result with the Python reference simulation.")
     _, expected = run_batched_simulation(
         alice_secret,
         bob_secret,
-        total_bits,
-        total_rounds,
-        init_batch_size,
-        sim_batch_size,
+        TEST_TOTAL_BITS,
+        TEST_TOTAL_ROUNDS,
+        TEST_INIT_BATCH_SIZE,
+        TEST_SIM_BATCH_SIZE,
     )
     expected_winner = alice.address if expected == 0 else bob.address
 
@@ -84,20 +111,25 @@ def test_happy_path_small_batched_game():
     scenario.verify(contract.data.winner.unwrap_some() == expected_winner)
     scenario.verify(contract.balance == sp.tez(0))
 
+    success("Happy-path SmartPy test completed successfully.")
+
 
 @sp.add_test()
 def test_timeout_refund_before_second_player():
-    scenario = sp.test_scenario()
+    section("Smart contract join-timeout test")
+    info("Creating SmartPy scenario for the single-player timeout refund case.")
 
+    scenario = sp.test_scenario()
     alice = sp.test_account("alice")
 
     contract = bet_contract.BinaryAutomatonBet(
         10,
-        100,
-        16,
-        8,
-        4,
-        4,
+        REVEAL_WINDOW_SECONDS,
+        PROGRESS_WINDOW_SECONDS,
+        TEST_TOTAL_BITS,
+        TEST_TOTAL_ROUNDS,
+        TEST_INIT_BATCH_SIZE,
+        TEST_SIM_BATCH_SIZE,
     )
     scenario += contract
 
@@ -120,3 +152,9 @@ def test_timeout_refund_before_second_player():
     scenario.verify(contract.data.finished)
     scenario.verify(contract.data.winner.unwrap_some() == alice.address)
     scenario.verify(contract.balance == sp.tez(0))
+
+    success("Single-player timeout refund test completed successfully.")
+
+
+if __name__ == "__main__":
+    success("test_contract.py executed. SmartPy registered the contract test scenarios.")
