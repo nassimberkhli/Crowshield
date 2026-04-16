@@ -1,7 +1,10 @@
 from contracts.simulation import (
     build_initial_state,
+    build_trace_for_contract,
+    hash_state,
     run_batched_simulation,
     run_full_simulation,
+    run_full_simulation_with_checkpoints,
     step_rule150_ring,
 )
 from utils.logs import info, section, success
@@ -111,10 +114,54 @@ def test_output_is_binary():
     success("Simulation output is binary.")
 
 
+def test_checkpoint_hashes_are_generated():
+    info("Checking that checkpoint hashes are produced for the requested rounds.")
+    _, bit, checkpoint_states, checkpoint_hashes = run_full_simulation_with_checkpoints(
+        secret1=5,
+        secret2=6,
+        total_bits=16,
+        total_rounds=8,
+        checkpoint_rounds=[2, 4, 6, 7],
+    )
+
+    assert bit in (0, 1)
+    assert sorted(checkpoint_states.keys()) == [2, 4, 6, 7]
+    assert sorted(checkpoint_hashes.keys()) == [2, 4, 6, 7]
+    assert checkpoint_hashes[2] == hash_state(checkpoint_states[2])
+    assert checkpoint_hashes[4] == hash_state(checkpoint_states[4])
+
+    success("Checkpoint hashes are generated correctly.")
+
+
+def test_trace_builder_returns_contract_order():
+    info("Checking that the trace builder returns the final bit and four checkpoint hashes.")
+
+    final_bit, checkpoint1, checkpoint2, checkpoint3, checkpoint4 = build_trace_for_contract(
+        secret1=12,
+        secret2=34,
+        total_bits=16,
+        total_rounds=8,
+        checkpoint_round_1=2,
+        checkpoint_round_2=4,
+        checkpoint_round_3=6,
+        checkpoint_round_4=7,
+    )
+
+    assert final_bit in (0, 1)
+    assert checkpoint1.startswith("0x")
+    assert checkpoint2.startswith("0x")
+    assert checkpoint3.startswith("0x")
+    assert checkpoint4.startswith("0x")
+
+    success("Trace builder returns data in the contract reveal order.")
+
+
 if __name__ == "__main__":
     test_initial_state_is_deterministic_concatenation()
     test_rule150_uses_left_center_and_right()
     test_reference_equivalence()
     test_initial_state_reuses_128_secret_bits()
     test_output_is_binary()
+    test_checkpoint_hashes_are_generated()
+    test_trace_builder_returns_contract_order()
     success("test_simulation.py completed successfully.")
